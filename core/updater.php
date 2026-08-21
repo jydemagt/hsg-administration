@@ -148,7 +148,7 @@ function hsg_update_validate_package(string $zipPath,bool $allowSameVersion=fals
         // Integrity hashes are primarily corruption detection. Package authenticity
         // still depends on the administrator only uploading trusted HSG packages.
         $hashes=(array)($manifest['files']??[]);
-        $ignoredMetaFiles=['.gitignore','.gitattributes','.DS_Store','README.md'];
+        $ignoredMetaFiles=['.gitignore','.gitattributes','.htaccess','.DS_Store','README.md'];
         foreach($entries as $rel=>$entry){
             if(!empty($entry['dir']) || $rel==='hsg-package.json') continue;
             if(in_array($rel,$ignoredMetaFiles,true) && !array_key_exists($rel,$hashes)) continue;
@@ -165,7 +165,7 @@ function hsg_update_validate_package(string $zipPath,bool $allowSameVersion=fals
             if(!hash_equals($expected, $hash)) {
                 // If CRLF line endings from Windows/Git caused a hash difference on text/doc files, test LF-normalized content
                 $normalized = str_replace("\r\n", "\n", $contents);
-                if(!hash_equals($expected, hash('sha256', $normalized)) && !str_starts_with($rel, 'JULES-HANDOFF/')) {
+                if(!hash_equals($expected, hash('sha256', $normalized))) {
                     throw new RuntimeException('Integritetskontrol fejlede for '.$rel.'.');
                 }
             }
