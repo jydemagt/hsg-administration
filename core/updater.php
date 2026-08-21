@@ -63,23 +63,58 @@ function hsg_update_validate_package(string $zipPath,bool $allowSameVersion=fals
     $zip=new ZipArchive();
     if($zip->open($zipPath)!==true) throw new RuntimeException('ZIP-filen kan ikke åbnes.');
     try{
-        $entries=[];$uncompressedTotal=0;
+        $rawEntries=[];$uncompressedTotal=0;
         if($zip->numFiles>1000) throw new RuntimeException('Opgraderingspakken indeholder for mange filer.');
+
+        // First pass: collect all raw relative paths
         for($i=0;$i<$zip->numFiles;$i++){
             $stat=$zip->statIndex($i);
             if(!$stat) continue;
             $raw=(string)$stat['name'];
             $rel=hsg_update_normalize_entry($raw);
             if($rel==='') continue;
-            if(isset($entries[$rel])) throw new RuntimeException('Opgraderingspakken indeholder dublerede filstier: '.$rel);
             $size=(int)($stat['size']??0);
-            if($size>50*1024*1024) throw new RuntimeException('En enkelt fil i opgraderingspakken er større end 50 MB: '.$rel);
-            $uncompressedTotal+=$size;
-            if($uncompressedTotal>300*1024*1024) throw new RuntimeException('Opgraderingspakken fylder for meget udpakket og afvises.');
-            $entries[$rel]=['index'=>$i,'size'=>$size,'crc'=>(int)($stat['crc']??0),'dir'=>str_ends_with($raw,'/')];
+            $rawEntries[]=['index'=>$i,'raw'=>$raw,'rel'=>$rel,'size'=>$size,'dir'=>str_ends_with($raw,'/')];
         }
+
+        // Auto-detect if all files live inside a single top-level directory (e.g. GitHub ZIPs like hsg-administration-1-main/)
+        $prefix='';
+        if(!empty($rawEntries)) {
+            $firstParts=explode('/',$rawEntries[0]['rel']);
+            if(count($firstParts)>1) {
+                $candidate=$firstParts[0].'/';
+                $allSharePrefix=true;
+                foreach($rawEntries as $e) {
+                    if(!str_starts_with($e['rel'],$candidate)) {
+                        $allSharePrefix=false;
+                        break;
+                    }
+                }
+                // Only consider it a subfolder wrapper if hsg-package.json is NOT in the root, but IS in candidate
+                $hasRootManifest=false;
+                foreach($rawEntries as $e) { if($e['rel']==='hsg-package.json') { $hasRootManifest=true; break; } }
+                if(!$hasRootManifest && $allSharePrefix) {
+                    $prefix=$candidate;
+                }
+            }
+        }
+
+        $entries=[];
+        foreach($rawEntries as $e) {
+            $rel=$e['rel'];
+            if($prefix!=='' && str_starts_with($rel,$prefix)) {
+                $rel=substr($rel,strlen($prefix));
+            }
+            if($rel==='') continue;
+            if(isset($entries[$rel])) throw new RuntimeException('Opgraderingspakken indeholder dublerede filstier: '.$rel);
+            if($e['size']>50*1024*1024) throw new RuntimeException('En enkelt fil i opgraderingspakken er større end 50 MB: '.$rel);
+            $uncompressedTotal+=$e['size'];
+            if($uncompressedTotal>300*1024*1024) throw new RuntimeException('Opgraderingspakken fylder for meget udpakket og afvises.');
+            $entries[$rel]=['index'=>$e['index'],'raw'=>$e['raw'],'size'=>$e['size'],'dir'=>$e['dir']];
+        }
+
         if(!isset($entries['hsg-package.json'])) throw new RuntimeException('ZIP-filen er ikke en gyldig HSG-opgraderingspakke (hsg-package.json mangler).');
-        $manifestRaw=$zip->getFromName('hsg-package.json');
+        $manifestRaw=$zip->getFromIndex((int)$entries['hsg-package.json']['index']);
         if($manifestRaw===false) throw new RuntimeException('Kunne ikke læse pakkemanifestet.');
         $manifest=json_decode($manifestRaw,true,32,JSON_THROW_ON_ERROR);
         if(!is_array($manifest) || ($manifest['product']??'')!=='HSG Administration') throw new RuntimeException('Pakken er ikke beregnet til HSG Administration.');
@@ -194,7 +229,7 @@ function hsg_update_extract_to_stage(string $zipPath,array $info): string {
             $target=$stage.'/'.$rel;
             $dir=dirname($target);
             if(!is_dir($dir) && !mkdir($dir,0775,true) && !is_dir($dir)) throw new RuntimeException('Kunne ikke oprette mappe til '.$rel.'.');
-            $stream=$zip->getStream($rel);
+            $stream=$zip->getStream($entry['raw']??$rel);
             if(!$stream) throw new RuntimeException('Kunne ikke læse '.$rel.' fra pakken.');
             $out=fopen($target,'wb');
             if(!$out){fclose($stream);throw new RuntimeException('Kunne ikke skrive '.$rel.' i stagingmappen.');}
@@ -323,7 +358,7 @@ function hsg_update_cleanup_staged(?string $path): void {
     if($base && $real && str_starts_with($real,$base.DIRECTORY_SEPARATOR)) @unlink($real);
 }
 
-function hsg_github_http_get(string $url): string {
+function hsg_github_http_get(string $url, int &$status = 0): string {
     $ch=curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL=>$url,
@@ -335,10 +370,11 @@ function hsg_github_http_get(string $url): string {
         CURLOPT_HTTPHEADER=>['Accept: application/vnd.github.v3+json'],
     ]);
     $res=curl_exec($ch);
-    $status=curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $status=(int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err=curl_error($ch);
     curl_close($ch);
     if($err) throw new RuntimeException('Fejl ved forbindelse til GitHub: '.$err);
+    if($status === 404) return '';
     if($status < 200 || $status >= 300) throw new RuntimeException('GitHub API svarede med HTTP-fejl '.$status.'.');
     return (string)$res;
 }
@@ -346,7 +382,20 @@ function hsg_github_http_get(string $url): string {
 function hsg_github_check_latest_release(string $repo = 'jydemagt/hsg-administration-1'): array {
     $url = "https://api.github.com/repos/{$repo}/releases/latest";
     try {
-        $json = hsg_github_http_get($url);
+        $httpStatus = 0;
+        $json = hsg_github_http_get($url, $httpStatus);
+        if($httpStatus === 404 || trim($json) === '') {
+            return [
+                'tag' => '',
+                'version' => app_version(),
+                'current_version' => app_version(),
+                'has_update' => false,
+                'name' => 'Ingen GitHub Releases endnu',
+                'notes' => 'Der er endnu ikke oprettet nogen officielle releases på GitHub-repositoryet.',
+                'download_url' => '',
+                'published_at' => '',
+            ];
+        }
         $data = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
         $tag = (string)($data['tag_name'] ?? '');
         $version = ltrim($tag, 'v');
@@ -380,6 +429,10 @@ function hsg_github_check_latest_release(string $repo = 'jydemagt/hsg-administra
 function hsg_github_download_and_stage(string $downloadUrl, string $version): array {
     if(!filter_var($downloadUrl, FILTER_VALIDATE_URL)) {
         throw new RuntimeException('Ugyldig opdaterings-URL fra GitHub.');
+    }
+    $host = strtolower((string)parse_url($downloadUrl, PHP_URL_HOST));
+    if(!in_array($host, ['github.com', 'api.github.com', 'codeload.github.com', 'objects.githubusercontent.com', 'raw.githubusercontent.com'], true) && !str_ends_with($host, '.githubusercontent.com')) {
+        throw new RuntimeException('Opdateringer kan kun hentes direkte fra GitHub-domæner.');
     }
     $dest = hsg_update_storage_dir().'/github-'.$version.'-'.bin2hex(random_bytes(6)).'.zip';
     $fp = fopen($dest, 'wb');
