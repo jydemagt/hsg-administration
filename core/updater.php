@@ -395,13 +395,34 @@ function hsg_github_check_latest_release(string $repo = 'jydemagt/hsg-administra
         $httpStatus = 0;
         $json = hsg_github_http_get($url, $httpStatus);
         if($httpStatus === 404 || trim($json) === '') {
+            // Fallback: check tags if no official Release has been created yet
+            $tagsUrl = "https://api.github.com/repos/{$repo}/tags";
+            $tagsStatus = 0;
+            $tagsJson = hsg_github_http_get($tagsUrl, $tagsStatus);
+            if($tagsStatus === 200 && trim($tagsJson) !== '') {
+                $tagsData = json_decode($tagsJson, true, 32, JSON_THROW_ON_ERROR);
+                if(is_array($tagsData) && !empty($tagsData[0]['name'])) {
+                    $tag = (string)$tagsData[0]['name'];
+                    $version = ltrim($tag, 'v');
+                    return [
+                        'tag' => $tag,
+                        'version' => $version,
+                        'current_version' => app_version(),
+                        'has_update' => version_compare($version, app_version(), '>'),
+                        'name' => 'Tag '.$tag,
+                        'notes' => 'Opdatering fundet via GitHub tags.',
+                        'download_url' => "https://github.com/{$repo}/archive/refs/tags/{$tag}.zip",
+                        'published_at' => '',
+                    ];
+                }
+            }
             return [
                 'tag' => '',
                 'version' => app_version(),
                 'current_version' => app_version(),
                 'has_update' => false,
                 'name' => 'Ingen GitHub Releases endnu',
-                'notes' => 'Der er endnu ikke oprettet nogen officielle releases på GitHub-repositoryet.',
+                'notes' => 'Der er endnu ikke oprettet nogen officielle releases eller tags på GitHub-repositoryet.',
                 'download_url' => '',
                 'published_at' => '',
             ];
