@@ -322,3 +322,96 @@ function hsg_update_cleanup_staged(?string $path): void {
     $base=realpath(hsg_update_storage_dir());$real=realpath($path);
     if($base && $real && str_starts_with($real,$base.DIRECTORY_SEPARATOR)) @unlink($real);
 }
+
+function hsg_github_http_get(string $url): string {
+    $ch=curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL=>$url,
+        CURLOPT_RETURNTRANSFER=>true,
+        CURLOPT_FOLLOWLOCATION=>true,
+        CURLOPT_MAXREDIRS=>5,
+        CURLOPT_TIMEOUT=>30,
+        CURLOPT_USERAGENT=>'HSG-Administration-Updater',
+        CURLOPT_HTTPHEADER=>['Accept: application/vnd.github.v3+json'],
+    ]);
+    $res=curl_exec($ch);
+    $status=curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err=curl_error($ch);
+    curl_close($ch);
+    if($err) throw new RuntimeException('Fejl ved forbindelse til GitHub: '.$err);
+    if($status < 200 || $status >= 300) throw new RuntimeException('GitHub API svarede med HTTP-fejl '.$status.'.');
+    return (string)$res;
+}
+
+function hsg_github_check_latest_release(string $repo = 'jydemagt/hsg-administration-1'): array {
+    $url = "https://api.github.com/repos/{$repo}/releases/latest";
+    try {
+        $json = hsg_github_http_get($url);
+        $data = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
+        $tag = (string)($data['tag_name'] ?? '');
+        $version = ltrim($tag, 'v');
+        $downloadUrl = '';
+        if(!empty($data['assets']) && is_array($data['assets'])) {
+            foreach($data['assets'] as $asset) {
+                if(str_ends_with(strtolower((string)$asset['name']), '.zip')) {
+                    $downloadUrl = (string)($asset['browser_download_url'] ?? '');
+                    break;
+                }
+            }
+        }
+        if($downloadUrl === '') {
+            $downloadUrl = (string)($data['zipball_url'] ?? "https://github.com/{$repo}/archive/refs/tags/{$tag}.zip");
+        }
+        return [
+            'tag' => $tag,
+            'version' => $version,
+            'current_version' => app_version(),
+            'has_update' => version_compare($version, app_version(), '>'),
+            'name' => (string)($data['name'] ?? $tag),
+            'notes' => (string)($data['body'] ?? ''),
+            'download_url' => $downloadUrl,
+            'published_at' => (string)($data['published_at'] ?? ''),
+        ];
+    } catch(Throwable $e) {
+        throw new RuntimeException('Kunne ikke hente oplysninger fra GitHub: '.$e->getMessage(), 0, $e);
+    }
+}
+
+function hsg_github_download_and_stage(string $downloadUrl, string $version): array {
+    if(!filter_var($downloadUrl, FILTER_VALIDATE_URL)) {
+        throw new RuntimeException('Ugyldig opdaterings-URL fra GitHub.');
+    }
+    $dest = hsg_update_storage_dir().'/github-'.$version.'-'.bin2hex(random_bytes(6)).'.zip';
+    $fp = fopen($dest, 'wb');
+    if(!$fp) throw new RuntimeException('Kunne ikke oprette midlertidig fil til GitHub-download.');
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $downloadUrl,
+        CURLOPT_FILE => $fp,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_TIMEOUT => 60,
+        CURLOPT_USERAGENT => 'HSG-Administration-Updater',
+    ]);
+    $success = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    fclose($fp);
+
+    if(!$success || $status !== 200) {
+        @unlink($dest);
+        throw new RuntimeException('Download fra GitHub fejlede (HTTP '.$status.($err ? ': '.$err : '').').');
+    }
+
+    try {
+        $info = hsg_update_validate_package($dest);
+        $info['path'] = $dest;
+        $info['original_name'] = 'GitHub Release '.$version;
+        return $info;
+    } catch(Throwable $e) {
+        @unlink($dest);
+        throw $e;
+    }
+}
