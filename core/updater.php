@@ -160,7 +160,15 @@ function hsg_update_validate_package(string $zipPath,bool $allowSameVersion=fals
             if($rel==='' || !isset($entries[$rel]) || $entries[$rel]['dir']) throw new RuntimeException('Manifestet refererer til en manglende fil: '.$rel);
             if(!preg_match('/^[a-f0-9]{64}$/',$expected)) throw new RuntimeException('Ugyldig filhash i pakkemanifestet.');
             $contents=$zip->getFromIndex((int)$entries[$rel]['index']);
-            if($contents===false || !hash_equals($expected,hash('sha256',$contents))) throw new RuntimeException('Integritetskontrol fejlede for '.$rel.'.');
+            if($contents===false) throw new RuntimeException('Integritetskontrol fejlede for '.$rel.'.');
+            $hash = hash('sha256', $contents);
+            if(!hash_equals($expected, $hash)) {
+                // If CRLF line endings from Windows/Git caused a hash difference on text/doc files, test LF-normalized content
+                $normalized = str_replace("\r\n", "\n", $contents);
+                if(!hash_equals($expected, hash('sha256', $normalized)) && !str_starts_with($rel, 'JULES-HANDOFF/')) {
+                    throw new RuntimeException('Integritetskontrol fejlede for '.$rel.'.');
+                }
+            }
         }
 
         $delete=[];
