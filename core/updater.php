@@ -390,71 +390,75 @@ function hsg_github_http_get(string $url, int &$status = 0): string {
 }
 
 function hsg_github_check_latest_release(string $repo = 'jydemagt/hsg-administration-1'): array {
-    $url = "https://api.github.com/repos/{$repo}/releases/latest";
+    // Check GitHub Releases first
+    $releaseUrl = "https://api.github.com/repos/{$repo}/releases/latest";
     try {
         $httpStatus = 0;
-        $json = hsg_github_http_get($url, $httpStatus);
-        if($httpStatus === 404 || trim($json) === '') {
-            // Fallback: check tags if no official Release has been created yet
-            $tagsUrl = "https://api.github.com/repos/{$repo}/tags";
-            $tagsStatus = 0;
-            $tagsJson = hsg_github_http_get($tagsUrl, $tagsStatus);
-            if($tagsStatus === 200 && trim($tagsJson) !== '') {
-                $tagsData = json_decode($tagsJson, true, 32, JSON_THROW_ON_ERROR);
-                if(is_array($tagsData) && !empty($tagsData[0]['name'])) {
-                    $tag = (string)$tagsData[0]['name'];
-                    $version = ltrim($tag, 'v');
-                    return [
-                        'tag' => $tag,
-                        'version' => $version,
-                        'current_version' => app_version(),
-                        'has_update' => version_compare($version, app_version(), '>'),
-                        'name' => 'Tag '.$tag,
-                        'notes' => 'Opdatering fundet via GitHub tags.',
-                        'download_url' => "https://github.com/{$repo}/archive/refs/tags/{$tag}.zip",
-                        'published_at' => '',
-                    ];
+        $json = hsg_github_http_get($releaseUrl, $httpStatus);
+        if($httpStatus === 200 && trim($json) !== '') {
+            $data = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
+            $tag = (string)($data['tag_name'] ?? '');
+            $version = ltrim($tag, 'v');
+            $downloadUrl = '';
+            if(!empty($data['assets']) && is_array($data['assets'])) {
+                foreach($data['assets'] as $asset) {
+                    if(str_ends_with(strtolower((string)$asset['name']), '.zip')) {
+                        $downloadUrl = (string)($asset['browser_download_url'] ?? '');
+                        break;
+                    }
                 }
+            }
+            if($downloadUrl === '') {
+                $downloadUrl = (string)($data['zipball_url'] ?? "https://github.com/{$repo}/archive/refs/tags/{$tag}.zip");
             }
             return [
-                'tag' => '',
-                'version' => app_version(),
+                'tag' => $tag,
+                'version' => $version,
                 'current_version' => app_version(),
-                'has_update' => false,
-                'name' => 'Ingen GitHub Releases endnu',
-                'notes' => 'Der er endnu ikke oprettet nogen officielle releases eller tags på GitHub-repositoryet.',
-                'download_url' => '',
-                'published_at' => '',
+                'has_update' => version_compare($version, app_version(), '>'),
+                'name' => (string)($data['name'] ?? $tag),
+                'notes' => (string)($data['body'] ?? ''),
+                'download_url' => $downloadUrl,
+                'published_at' => (string)($data['published_at'] ?? ''),
             ];
         }
-        $data = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
-        $tag = (string)($data['tag_name'] ?? '');
-        $version = ltrim($tag, 'v');
-        $downloadUrl = '';
-        if(!empty($data['assets']) && is_array($data['assets'])) {
-            foreach($data['assets'] as $asset) {
-                if(str_ends_with(strtolower((string)$asset['name']), '.zip')) {
-                    $downloadUrl = (string)($asset['browser_download_url'] ?? '');
-                    break;
-                }
-            }
+    } catch(Throwable $e) {
+        // Fallthrough to main branch check if releases call fails
+    }
+
+    // Direct GitHub main branch check (checks raw hsg-package.json on main)
+    try {
+        $rawManifestUrl = "https://raw.githubusercontent.com/{$repo}/main/hsg-package.json";
+        $manifestStatus = 0;
+        $manifestJson = hsg_github_http_get($rawManifestUrl, $manifestStatus);
+        if($manifestStatus === 200 && trim($manifestJson) !== '') {
+            $manifest = json_decode($manifestJson, true, 32, JSON_THROW_ON_ERROR);
+            $version = (string)($manifest['version'] ?? app_version());
+            return [
+                'tag' => 'main',
+                'version' => $version,
+                'current_version' => app_version(),
+                'has_update' => version_compare($version, app_version(), '>'),
+                'name' => 'GitHub main branch (v'.$version.')',
+                'notes' => (string)($manifest['release_notes'] ?? 'Ny opdatering fra GitHub main branch.'),
+                'download_url' => "https://github.com/{$repo}/archive/refs/heads/main.zip",
+                'published_at' => date('Y-m-d H:i:s'),
+            ];
         }
-        if($downloadUrl === '') {
-            $downloadUrl = (string)($data['zipball_url'] ?? "https://github.com/{$repo}/archive/refs/tags/{$tag}.zip");
-        }
-        return [
-            'tag' => $tag,
-            'version' => $version,
-            'current_version' => app_version(),
-            'has_update' => version_compare($version, app_version(), '>'),
-            'name' => (string)($data['name'] ?? $tag),
-            'notes' => (string)($data['body'] ?? ''),
-            'download_url' => $downloadUrl,
-            'published_at' => (string)($data['published_at'] ?? ''),
-        ];
     } catch(Throwable $e) {
         throw new RuntimeException('Kunne ikke hente oplysninger fra GitHub: '.$e->getMessage(), 0, $e);
     }
+
+    return [
+        'tag' => '',
+        'version' => app_version(),
+        'current_version' => app_version(),
+        'has_update' => false,
+        'name' => 'Ingen GitHub Releases endnu',
+        'notes' => 'Der er endnu ikke oprettet nogen officielle releases eller opdateringer på GitHub-repositoryet.',
+        'download_url' => '',
+        'published_at' => '',
+    ];
 }
 
 function hsg_github_download_and_stage(string $downloadUrl, string $version): array {
