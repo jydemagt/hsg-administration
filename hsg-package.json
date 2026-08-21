@@ -1,7 +1,7 @@
 {
     "product": "HSG Administration",
     "package_type": "distribution",
-    "version": "1.7.1",
+    "version": "1.7.2",
     "min_php": "8.1.0",
     "required_extensions": [
         "pdo_mysql",
@@ -35,7 +35,7 @@
         "core/access_links.php",
         "users.php"
     ],
-    "release_notes": "v1.7.1: Etableret direkte GitHub opdateringskanal (jydemagt/hsg-administration-1) via main branch og releases.",
+    "release_notes": "v1.7.2: Test-release for verifikation af GitHub opdateringsknappen p\u00e5 live webhotellet.",
     "delete": [
         "test-catalog-v151.pdf"
     ],
@@ -48,7 +48,7 @@
         "admin-login.php": "04b061728bcf753ba6dbeb535bc69fae7a3fff3d1ed5605ef9b8a85339691cfe",
         "admin-setup.php": "323ecd555ca2f7b4e920c482736e53829c14e7ef0ef400e7421872f2b954e8d2",
         "admin.php": "e0ab785ffc6f69eea80462fd663709c43c88fe3b7b95ce4318107163aaed7dbc",
-        "app_version.php": "06d1f8c1629134171759971fa5304d5bba2f1c2eced857fc62cc205fb98f6e2d",
+        "app_version.php": "1901bce7aa1faf5d8b62634ecc33e44c923c31f2e93ef01b920d97449d3f8838",
         "assets/bottle-placeholder.svg": "bb77203924ece9b630dce344f4d700e017028398787a1bdb1612b9a70b9599f4",
         "assets/style.css": "c2a0233da8ab45e7f3518462ac0ca51b815557d6e6ff996908a7507080708048",
         "auth.php": "a34d291e367c49c6163dd3220624d8202c57b028bd6fa5d1db95e29cac66c556",
