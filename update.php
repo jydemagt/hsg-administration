@@ -15,7 +15,27 @@ function hsg_staged_update_from_session(): ?array {
 if($_SERVER['REQUEST_METHOD']==='POST'){
     $action=(string)($_POST['action']??'inspect');
     try{
-        if($action==='inspect'){
+        if($action==='check_github'){
+            $release=hsg_github_check_latest_release();
+            $_SESSION['hsg_github_release']=$release;
+            if($release['has_update']) {
+                flash('success','Ny opdatering fundet på GitHub: version '.$release['version'].'.');
+            } else {
+                flash('info','Du har allerede den nyeste version ('.$release['version'].') ifølge GitHub.');
+            }
+        } elseif($action==='stage_github'){
+            $url=(string)($_POST['download_url']??'');
+            $ver=(string)($_POST['version']??'');
+            if($url==='' || $ver==='') throw new RuntimeException('Mangler oplysninger om GitHub-opdatering.');
+            $old=hsg_staged_update_from_session(); if($old) hsg_update_cleanup_staged((string)$old['path']);
+            $info=hsg_github_download_and_stage($url, $ver);
+            $_SESSION['hsg_staged_update']=[
+                'path'=>$info['path'],'sha256'=>$info['package_sha256'],'original_name'=>$info['original_name'],
+                'version'=>$info['version'],'current_version'=>$info['current_version'],'release_notes'=>$info['release_notes'],
+                'file_count'=>$info['file_count'],'package_size'=>$info['package_size'],'min_php'=>$info['min_php'],
+            ];
+            flash('success','Opdatering fra GitHub er hentet og kontrolleret. Gennemgå oplysningerne og vælg Installér opgradering.');
+        } elseif($action==='inspect'){
             $old=hsg_staged_update_from_session(); if($old) hsg_update_cleanup_staged((string)$old['path']);
             $info=hsg_update_stage_uploaded_file($_FILES['package']??[]);
             $_SESSION['hsg_staged_update']=[
@@ -43,6 +63,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
 }
 
 $staged=hsg_staged_update_from_session();
+$githubRelease=$_SESSION['hsg_github_release']??null;
 $history=db_table_exists($pdo,'hsg_update_runs')?$pdo->query('SELECT * FROM hsg_update_runs ORDER BY created_at DESC,id DESC LIMIT 30')->fetchAll():[];
 $uploadLimit=ini_get('upload_max_filesize')?:'?';$postLimit=ini_get('post_max_size')?:'?';
 page_header('Opgradering');
@@ -54,7 +75,39 @@ page_header('Opgradering');
 </div>
 
 <div class="card">
-  <h2>Upload ny HSG-version</h2>
+  <h2>Automatisk opdatering via GitHub</h2>
+  <p class="muted">HSG Administration kan direkte søge efter og hente den seneste godkendte version fra GitHub-repositoryet (<code>jydemagt/hsg-administration-1</code>).</p>
+  <form method="post">
+    <?=csrf_field()?>
+    <input type="hidden" name="action" value="check_github">
+    <button type="submit">Søg efter nye opdateringer på GitHub</button>
+  </form>
+
+  <?php if(is_array($githubRelease)): ?>
+    <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-card, #f8f9fa); border: 1px solid var(--border-color, #e0e0e0); border-radius: 6px;">
+      <h3>Seneste release på GitHub: <?=h($githubRelease['version'])?></h3>
+      <p><strong>Status:</strong> <?= $githubRelease['has_update'] ? '<span style="color: green; font-weight: bold;">Ny version tilgængelig!</span>' : 'Du kører allerede nyeste version.' ?></p>
+      <?php if(!empty($githubRelease['published_at'])): ?><p class="muted">Udgivet: <?=h(date('d-m-Y H:i', strtotime($githubRelease['published_at'])))?></p><?php endif; ?>
+      <?php if(trim($githubRelease['notes']) !== ''): ?>
+        <p><strong>Release notes:</strong></p>
+        <p><?=nl2br(h($githubRelease['notes']))?></p>
+      <?php endif; ?>
+
+      <?php if($githubRelease['download_url'] !== ''): ?>
+        <form method="post" style="margin-top: 1rem;">
+          <?=csrf_field()?>
+          <input type="hidden" name="action" value="stage_github">
+          <input type="hidden" name="version" value="<?=h($githubRelease['version'])?>">
+          <input type="hidden" name="download_url" value="<?=h($githubRelease['download_url'])?>">
+          <button type="submit">Hent og kontrollér opdatering fra GitHub</button>
+        </form>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+</div>
+
+<div class="card">
+  <h2>Upload ny HSG-version manuelt</h2>
   <p class="muted">Upload en ZIP-pakke fra HSG Administration. Systemet kontrollerer først produkt, versionsnummer, filstier, PHP-krav og integritet. Intet installeres ved selve kontrollen.</p>
   <form method="post" enctype="multipart/form-data">
     <?=csrf_field()?>
