@@ -148,8 +148,10 @@ function hsg_update_validate_package(string $zipPath,bool $allowSameVersion=fals
         // Integrity hashes are primarily corruption detection. Package authenticity
         // still depends on the administrator only uploading trusted HSG packages.
         $hashes=(array)($manifest['files']??[]);
+        $ignoredMetaFiles=['.gitignore','.gitattributes','.DS_Store','README.md'];
         foreach($entries as $rel=>$entry){
             if(!empty($entry['dir']) || $rel==='hsg-package.json') continue;
+            if(in_array($rel,$ignoredMetaFiles,true) && !array_key_exists($rel,$hashes)) continue;
             if(!array_key_exists($rel,$hashes)) throw new RuntimeException('Pakken indeholder en fil, som ikke er med i integritetsmanifestet: '.$rel);
         }
         foreach($hashes as $rel=>$expected){
